@@ -691,8 +691,8 @@ function CreateGeometryBuffers(program) {
 
     // Set lighting parameters
     if (uLightDirGL) {
-        // Normalized light direction (pointing down and to the right)
-        const lightDir = normalize([0.5, -1.0, 0.3]);
+        // Normalized light direction (pointing from front-top-right for better cylinder visibility)
+        const lightDir = normalize([0.3, 0.5, 1.0]);
         gl.uniform3fv(uLightDirGL, new Float32Array(lightDir));
     }
 
@@ -702,8 +702,8 @@ function CreateGeometryBuffers(program) {
     }
 
     if (uAmbientStrengthGL) {
-        // Ambient light strength (0.2 = 20% ambient light)
-        gl.uniform1f(uAmbientStrengthGL, 0.2);
+        // Ambient light strength (0.4 = 40% ambient light)
+        gl.uniform1f(uAmbientStrengthGL, 0.4);
     }
 
     // Get texture toggle state
@@ -1082,30 +1082,37 @@ function ApplyBendForAxis(bendAxis, bendAngle) {
         return;
     }
 
-    // Determine affected axes based on bend axis
+    // Determine rotation axes based on bend axis
     let axis1, axis2;
     switch (bendAxis) {
-        case 0: // X axis
-            axis1 = 1; axis2 = 2; break; // Y and Z
-        case 1: // Y axis
-            axis1 = 0; axis2 = 2; break; // X and Z
-        case 2: // Z axis
-            axis1 = 0; axis2 = 1; break; // X and Y
+        case 0: // X axis (bend around X)
+            axis1 = 1; // Y
+            axis2 = 2; // Z
+            break;
+        case 1: // Y axis (bend around Y)
+            axis1 = 0; // X
+            axis2 = 2; // Z
+            break;
+        case 2: // Z axis (bend around Z)
+            axis1 = 0; // X
+            axis2 = 1; // Y
+            break;
         default:
-            axis1 = 0; axis2 = 2; // Default to X and Z
+            axis1 = 1;
+            axis2 = 2;
     }
 
-    // Find the range of the model along the bend axis
+    // Find the range of the model along the primary rotation axis
     let min = Infinity, max = -Infinity;
     for (let i = 0; i < vertexCount; i++) {
         const offset = i * componentsPerVertex;
-        const value = vertices[offset + bendAxis];
+        const value = vertices[offset + axis1];
         min = Math.min(min, value);
         max = Math.max(max, value);
     }
 
     const range = max - min;
-    if (range < 0.001) return; // Skip if model is flat along bend axis
+    if (range < 0.001) return; // Skip if model is flat along the axis
 
     // Apply bend to each vertex
     for (let i = 0; i < vertexCount; i++) {
@@ -1118,30 +1125,33 @@ function ApplyBendForAxis(bendAxis, bendAngle) {
             vertices[offset + 2]
         ];
 
-        // Calculate bend factor (0 to 1) based on position along bend axis
-        const bendFactor = (pos[bendAxis] - min) / range;
+        // Calculate normalized position along the primary rotation axis (0 to 1)
+        // Add 0.5 to center the effect, similar to the shader code in the image
+        const normalizedPos = (pos[axis1] - min) / range;
 
-        // Calculate bend angle for this vertex
-        const vertexBendAngle = bendFactor * bendAngleRad;
+        // Calculate rotation angle for this vertex
+        // This creates a smooth bend effect based on position
+        const vertexAngle = normalizedPos * bendAngleRad;
+
+        // Calculate sine and cosine for rotation
+        const cos = Math.cos(vertexAngle);
+        const sin = Math.sin(vertexAngle);
+
+        // Store original values for the affected axes
+        const origAxis1 = pos[axis1];
+        const origAxis2 = pos[axis2];
 
         // Apply rotation around the bend axis
-        const cos = Math.cos(vertexBendAngle);
-        const sin = Math.sin(vertexBendAngle);
-
-        // Store original values
-        const orig1 = pos[axis1];
-        const orig2 = pos[axis2];
-
-        // Apply rotation
-        pos[axis1] = orig1 * cos - orig2 * sin;
-        pos[axis2] = orig1 * sin + orig2 * cos;
+        // This is similar to the matrix multiplication shown in the image
+        pos[axis1] = origAxis1 * cos - origAxis2 * sin;
+        pos[axis2] = origAxis1 * sin + origAxis2 * cos;
 
         // Update vertex position
         vertices[offset] = pos[0];
         vertices[offset + 1] = pos[1];
         vertices[offset + 2] = pos[2];
 
-        // Update normal (simplified - just rotate the normal by the same angle)
+        // Update normal
         const normalOffset = offset + 8; // nx, ny, nz start at index 8
         const normal = [
             vertices[normalOffset],
@@ -1149,6 +1159,7 @@ function ApplyBendForAxis(bendAxis, bendAngle) {
             vertices[normalOffset + 2]
         ];
 
+        // Rotate the normal in the same way
         const origNormal1 = normal[axis1];
         const origNormal2 = normal[axis2];
 
