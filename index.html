@@ -287,12 +287,9 @@ void main() {
     // --- Final Position Calculation ---
     gl_Position = uProjectionMatrix * uViewMatrix * modelMatrix * vec4(Pos, 1.0);
 
-    // Transform normal to world space
-    mat3 normalMatrix = mat3(
-        coY, 0.0, siY,
-        siX * siY, coX, -siX * coY,
-        -coX * siY, siX, coX * coY
-    );
+    // Transform normal to world space using the same rotation matrices
+    // Extract the 3x3 rotation part from the model matrix
+    mat3 normalMatrix = mat3(modelMatrix);
     vec3 worldNormal = normalize(normalMatrix * Normal);
 
     // Calculate Lambertian lighting
