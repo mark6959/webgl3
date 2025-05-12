@@ -1082,37 +1082,65 @@ function ApplyBendForAxis(bendAxis, bendAngle) {
         return;
     }
 
-    // Determine rotation axes based on bend axis
-    let axis1, axis2;
+    // Determine axes for bending
+    // bendAxis = axis to bend around
+    // heightAxis = axis along which to measure height for bending
+    // forwardAxis = axis that will be curved
+    let heightAxis, forwardAxis;
     switch (bendAxis) {
         case 0: // X axis (bend around X)
-            axis1 = 1; // Y
-            axis2 = 2; // Z
+            heightAxis = 1;  // Y is the height
+            forwardAxis = 2; // Z will be curved
             break;
         case 1: // Y axis (bend around Y)
-            axis1 = 0; // X
-            axis2 = 2; // Z
+            heightAxis = 2;  // Z is the height
+            forwardAxis = 0; // X will be curved
             break;
         case 2: // Z axis (bend around Z)
-            axis1 = 0; // X
-            axis2 = 1; // Y
+            heightAxis = 1;  // Y is the height
+            forwardAxis = 0; // X will be curved
             break;
         default:
-            axis1 = 1;
-            axis2 = 2;
+            heightAxis = 1;
+            forwardAxis = 2;
     }
 
-    // Find the range of the model along the primary rotation axis
-    let min = Infinity, max = -Infinity;
+    // Find the bounding box of the model
+    let min = [Infinity, Infinity, Infinity];
+    let max = [-Infinity, -Infinity, -Infinity];
+
     for (let i = 0; i < vertexCount; i++) {
         const offset = i * componentsPerVertex;
-        const value = vertices[offset + axis1];
-        min = Math.min(min, value);
-        max = Math.max(max, value);
+        for (let axis = 0; axis < 3; axis++) {
+            min[axis] = Math.min(min[axis], vertices[offset + axis]);
+            max[axis] = Math.max(max[axis], vertices[offset + axis]);
+        }
     }
 
-    const range = max - min;
-    if (range < 0.001) return; // Skip if model is flat along the axis
+    // Calculate model dimensions and center
+    const dimensions = [
+        max[0] - min[0],
+        max[1] - min[1],
+        max[2] - min[2]
+    ];
+
+    const center = [
+        (min[0] + max[0]) / 2,
+        (min[1] + max[1]) / 2,
+        (min[2] + max[2]) / 2
+    ];
+
+    // Calculate bend radius based on the angle and model size
+    // For a small angle, a large radius; for a large angle, a small radius
+    const heightSize = dimensions[heightAxis];
+
+    // Calculate bend radius - as angle approaches 180 degrees, radius approaches model height/2
+    // This creates a nice bend effect for reasonable angles
+    const maxAngle = Math.PI; // 180 degrees
+    const bendRadius = heightSize / (2 * Math.sin(Math.min(Math.abs(bendAngleRad), maxAngle) / 2));
+
+    // Store the sign of the bend angle to maintain proper direction
+    const bendSign = Math.sign(bendAngleRad);
 
     // Apply bend to each vertex
     for (let i = 0; i < vertexCount; i++) {
@@ -1125,33 +1153,48 @@ function ApplyBendForAxis(bendAxis, bendAngle) {
             vertices[offset + 2]
         ];
 
-        // Calculate normalized position along the primary rotation axis (0 to 1)
-        // Add 0.5 to center the effect, similar to the shader code in the image
-        const normalizedPos = (pos[axis1] - min) / range;
+        // Calculate normalized height position (0 at bottom, 1 at top)
+        const heightPos = (pos[heightAxis] - min[heightAxis]) / heightSize;
 
-        // Calculate rotation angle for this vertex
-        // This creates a smooth bend effect based on position
-        const vertexAngle = normalizedPos * bendAngleRad;
+        // Calculate angle for this vertex based on height
+        // This creates a smooth bend from bottom to top
+        // Use the absolute angle for calculations but preserve sign for direction
+        const vertexAngle = heightPos * Math.abs(bendAngleRad) * bendSign;
 
-        // Calculate sine and cosine for rotation
+        // Calculate the distance from the center along the forward axis
+        const forwardOffset = pos[forwardAxis] - center[forwardAxis];
+
+        // Apply the bend transformation
+        // Calculate new position using circular arc
         const cos = Math.cos(vertexAngle);
         const sin = Math.sin(vertexAngle);
 
-        // Store original values for the affected axes
-        const origAxis1 = pos[axis1];
-        const origAxis2 = pos[axis2];
+        // The vertex will move in an arc
+        // The radius of the arc is bendRadius + forwardOffset
+        const radius = bendRadius + forwardOffset;
 
-        // Apply rotation around the bend axis
-        // This is similar to the matrix multiplication shown in the image
-        pos[axis1] = origAxis1 * cos - origAxis2 * sin;
-        pos[axis2] = origAxis1 * sin + origAxis2 * cos;
+        // Calculate new position
+        // The height position becomes an angle around the bend
+        // The forward position becomes a radius from the bend axis
+        const newForward = radius * cos;
+        const newHeight = radius * sin;
+
+        // Calculate offset to keep the model centered
+        // This ensures the model doesn't float away with negative angles
+        const centerOffset = bendRadius * (1 - Math.cos(bendAngleRad / 2));
+
+        // Update the position
+        // The forward axis gets the cosine component
+        // The height axis gets the sine component
+        pos[forwardAxis] = center[forwardAxis] + newForward - bendRadius + (bendSign * centerOffset);
+        pos[heightAxis] = min[heightAxis] + newHeight;
 
         // Update vertex position
         vertices[offset] = pos[0];
         vertices[offset + 1] = pos[1];
         vertices[offset + 2] = pos[2];
 
-        // Update normal
+        // Update normal vectors
         const normalOffset = offset + 8; // nx, ny, nz start at index 8
         const normal = [
             vertices[normalOffset],
@@ -1159,12 +1202,15 @@ function ApplyBendForAxis(bendAxis, bendAngle) {
             vertices[normalOffset + 2]
         ];
 
-        // Rotate the normal in the same way
-        const origNormal1 = normal[axis1];
-        const origNormal2 = normal[axis2];
+        // Calculate new normal direction
+        // For a bend, the normal rotates with the surface
+        const origNormalForward = normal[forwardAxis];
+        const origNormalHeight = normal[heightAxis];
 
-        normal[axis1] = origNormal1 * cos - origNormal2 * sin;
-        normal[axis2] = origNormal1 * sin + origNormal2 * cos;
+        // Rotate the normal to match the bend
+        // Use the same rotation as for the vertex position
+        normal[forwardAxis] = origNormalForward * cos - origNormalHeight * sin;
+        normal[heightAxis] = origNormalForward * sin + origNormalHeight * cos;
 
         // Normalize the normal
         const length = Math.sqrt(normal[0]*normal[0] + normal[1]*normal[1] + normal[2]*normal[2]);
